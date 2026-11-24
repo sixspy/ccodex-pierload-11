@@ -8,6 +8,7 @@ SKIP_PARTS = {
     "node_modules",
     "__pycache__",
     ".pytest_cache",
+    ".venv",
     "tests",
     "scripts",
     ".git",

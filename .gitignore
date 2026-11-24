@@ -1,4 +1,6 @@
 __pycache__/
 .pytest_cache/
 data/*.db
+data/*.db-wal
+data/*.db-shm
 .venv/

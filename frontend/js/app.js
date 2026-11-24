@@ -36,6 +36,7 @@ createApp({
     const lineageEdges = ref([]);
     const customsJobs = ref([]);
     const craneJobs = ref([]);
+    const customsReceipts = ref([]);
     const bridgeDetail = ref(null);
     const ticketDetail = ref(null);
     const reconOne = ref(null);
@@ -67,6 +68,7 @@ createApp({
     });
     const customsForm = ref({ bl_code: "BL-2026-0101", row_count: 1 });
     const craneForm = ref({ berth_slot: "B-09", ticket_id: null });
+    const receiptForm = ref({ bl_code: "BL-2026-0101", receipt_ref: "CUS-RCPT-", detail: "" });
 
     function logout() {
       token.value = "";
@@ -82,6 +84,11 @@ createApp({
     const releasableTickets = computed(() =>
       tickets.value.filter((t) => t.status === "已裁定")
     );
+    const receiptMap = computed(() => {
+      const m = {};
+      for (const r of customsReceipts.value) m[r.bl_code] = true;
+      return m;
+    });
     const sealableTickets = computed(() =>
       tickets.value.filter((t) => ["已裁定","已放行"].includes(t.status))
     );
@@ -126,10 +133,10 @@ createApp({
       if (!token.value) return;
       clearFlash();
       try {
-        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2] = await Promise.all([
+        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2, cr] = await Promise.all([
           api.dashboard(), api.bridges(), api.lanes(), api.tickets(), api.overloads(),
           api.gateReleases(), api.seals(), api.blList(), api.lineage(),
-          api.customsJobs(), api.craneJobs(),
+          api.customsJobs(), api.craneJobs(), api.customsReceipts(),
         ]);
         dash.value = d || {};
         bridges.value = br.items || [];
@@ -142,6 +149,7 @@ createApp({
         lineageEdges.value = lg.items || [];
         customsJobs.value = cj.items || [];
         craneJobs.value = cj2.items || [];
+        customsReceipts.value = cr.items || [];
         if (bridges.value.length) {
           laneForm.value.bridge_id = laneForm.value.bridge_id || bridges.value[0].id;
         }
@@ -206,6 +214,12 @@ createApp({
     async function releaseGate() {
       clearFlash();
       try {
+        const t = tickets.value.find((x) => x.id === gateForm.value.ticket_id);
+        if (t && !receiptMap.value[t.bl_ref]) {
+          actionErr.value = `海关回执未到（${t.bl_ref}），禁写正式完成态（回执禁完）`;
+          actionOk.value = "";
+          return;
+        }
         await api.releaseGate(gateForm.value);
         flashOk("已放行"); await refresh();
       } catch (e) { flashErr(e); }
@@ -249,6 +263,14 @@ createApp({
       try { await api.customsStub(customsForm.value); flashOk("海关空桩入队"); await refresh(); }
       catch (e) { flashErr(e); }
     }
+    async function registerReceipt() {
+      clearFlash();
+      try {
+        await api.registerCustomsReceipt(receiptForm.value);
+        flashOk("海关回执已登记，完成态禁完解除");
+        await refresh();
+      } catch (e) { flashErr(e); }
+    }
     async function enqueueCrane() {
       clearFlash();
       try { await api.craneStub(craneForm.value); flashOk("岸桥空桩入队"); await refresh(); }
@@ -262,16 +284,16 @@ createApp({
     return {
       token, user, username, password, err, actionErr, actionOk, tab, nav,
       dash, bridges, lanes, tickets, overloads, gateReleases, seals, blList,
-      lineageEdges, customsJobs, craneJobs, bridgeDetail, ticketDetail,
+      lineageEdges, customsJobs, craneJobs, customsReceipts, bridgeDetail, ticketDetail,
       reconOne, reconAllItems, proofOne, reconCode, proofCode,
       bridgeForm, laneForm, ticketForm, overloadOpenForm, gateForm, sealForm,
-      blForm, lineageForm, customsForm, craneForm,
-      adjudicableTickets, releasableTickets, sealableTickets,
+      blForm, lineageForm, customsForm, craneForm, receiptForm,
+      adjudicableTickets, releasableTickets, sealableTickets, receiptMap,
       login, logout, refresh,
       fmtT, ticketClass, shortText,
       createBridge, loadBridgeDetail, createLane, createTicket, loadTicketDetail, selectTicket,
       openOverload, closeOverload, releaseGate, createSeal, registerBl, addLineage,
-      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, enqueueCrane,
+      loadReconcile, loadAllReconcile, loadProof, enqueueCustoms, registerReceipt, enqueueCrane,
     };
   },
   template: `

@@ -1,0 +1,14 @@
+[
+  {
+    "bl_code": "BL-2026-0101",
+    "receipt_ref": "CUS-RCPT-0101-0001",
+    "detail": "卷板钢材海关放行回执",
+    "received_at": "2026-01-08T10:00:00"
+  },
+  {
+    "bl_code": "BL-2026-0102",
+    "receipt_ref": "CUS-RCPT-0102-0001",
+    "detail": "空箱海关放行回执",
+    "received_at": "2026-01-07T11:00:00"
+  }
+]

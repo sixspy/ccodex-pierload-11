@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, now_iso, write_audit
+from db import connect, has_customs_receipt, now_iso, write_audit
 from models import BlIn
 
 router = APIRouter(tags=["bl"])
@@ -17,7 +17,12 @@ def list_bl(authorization: AuthHeader = None):
         rows = conn.execute(
             "SELECT * FROM bl_manifests ORDER BY bl_code"
         ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["customs_receipt_ready"] = has_customs_receipt(conn, d["bl_code"])
+            items.append(d)
+        return {"items": items}
 
 
 @router.get("/api/bl/{bl_code}")
@@ -34,7 +39,9 @@ def get_bl(bl_code: str, authorization: AuthHeader = None):
                WHERE bl_ref=? ORDER BY id DESC""",
             (bl_code,),
         ).fetchall()
-        return {"bl": dict(row), "tickets": [dict(t) for t in tickets]}
+        data = dict(row)
+        data["customs_receipt_ready"] = has_customs_receipt(conn, bl_code)
+        return {"bl": data, "tickets": [dict(t) for t in tickets]}
 
 
 @router.post("/api/bl")

@@ -1,11 +1,13 @@
 export const gateViewTemplate = `
 <section class="panel">
   <h2>闸口放行</h2>
-  <p class="hint">须票态已裁定且无开放超重挂起；旁路未闭环不得抬杆。</p>
+  <p class="hint">须票态已裁定、无开放超重挂起，且<strong>海关回执已到</strong>；回执未到禁写正式完成态（回执禁完）。</p>
   <div class="form-row">
     <div><label>过磅票</label>
       <select v-model.number="gateForm.ticket_id">
-        <option v-for="t in releasableTickets" :key="t.id" :value="t.id">{{ t.ticket_code }}</option>
+        <option v-for="t in releasableTickets" :key="t.id" :value="t.id">
+          {{ t.ticket_code }} · {{ t.bl_ref }} · 回执{{ receiptMap[t.bl_ref] ? '已到' : '待回' }}
+        </option>
       </select>
     </div>
     <div><label>值班员</label><input v-model="gateForm.officer"/></div>

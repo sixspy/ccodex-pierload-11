@@ -35,8 +35,16 @@ def connect() -> sqlite3.Connection:
     DATA.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def begin_immediate(conn: sqlite3.Connection) -> None:
+    """显式立即写事务：抢票锁等需要跨连接原子判定的写口使用。"""
+    conn.isolation_level = None
+    conn.execute("BEGIN IMMEDIATE")
 
 
 def sha_password(password: str) -> str:
@@ -115,6 +123,10 @@ CREATE TABLE IF NOT EXISTS gate_releases(
   FOREIGN KEY(ticket_id) REFERENCES weigh_tickets(id),
   FOREIGN KEY(lane_id) REFERENCES weigh_lanes(id)
 );
+-- 同票正式完成态唯一：并发抢写完成口时，数据库层兜底拒绝第二条已放行，
+-- 不依赖应用层短生命周期锁的持锁窗口。
+CREATE UNIQUE INDEX IF NOT EXISTS ux_gate_releases_formal
+ON gate_releases(ticket_id) WHERE status='已放行';
 CREATE TABLE IF NOT EXISTS gate_seals(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticket_id INTEGER NOT NULL,
@@ -173,6 +185,13 @@ CREATE TABLE IF NOT EXISTS customs_stub_jobs(
   detail TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS customs_receipts(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  bl_code TEXT UNIQUE NOT NULL,
+  receipt_ref TEXT NOT NULL,
+  detail TEXT,
+  received_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS crane_plan_jobs(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticket_id INTEGER,
@@ -193,6 +212,32 @@ def write_audit(
            VALUES (?,?,?,?,?)""",
         (actor, action, target, json.dumps(payload, ensure_ascii=False), now_iso()),
     )
+
+
+def has_customs_receipt(conn: sqlite3.Connection, bl_code: str) -> bool:
+    """海关回执是否到达。正式完成态唯一回执口径，全仓不得另立标准。"""
+    row = conn.execute(
+        "SELECT 1 FROM customs_receipts WHERE bl_code=? LIMIT 1", (bl_code,)
+    ).fetchone()
+    return row is not None
+
+
+def seed_customs_receipts(conn: sqlite3.Connection) -> None:
+    for row in _load_json("customs_receipts.json"):
+        if conn.execute(
+            "SELECT id FROM customs_receipts WHERE bl_code=?", (row["bl_code"],)
+        ).fetchone():
+            continue
+        conn.execute(
+            """INSERT INTO customs_receipts(bl_code,receipt_ref,detail,received_at)
+               VALUES (?,?,?,?)""",
+            (
+                row["bl_code"],
+                row["receipt_ref"],
+                row.get("detail", "海关回执"),
+                row["received_at"],
+            ),
+        )
 
 
 def _load_json(name: str):
@@ -276,33 +321,36 @@ def _lane_id(conn, code: str) -> int | None:
 
 
 def seed_tickets(conn: sqlite3.Connection) -> None:
-    for row in _load_json("tickets.json"):
-        if conn.execute(
-            "SELECT id FROM weigh_tickets WHERE ticket_code=?", (row["ticket_code"],)
-        ).fetchone():
-            continue
-        lane = _lane_id(conn, row["lane_code"])
-        if not lane:
-            continue
-        axles = row.get("axle_weights", [])
-        gross = float(row.get("gross_t", sum(float(a.get("w", 0)) for a in axles)))
-        conn.execute(
-            """INSERT INTO weigh_tickets(ticket_code,lane_id,bl_ref,vehicle_plate,
-               axle_weights,gross_t,generation,status,adjudicated_at,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (
-                row["ticket_code"],
-                lane,
-                row["bl_ref"],
-                row["vehicle_plate"],
-                json.dumps(axles, ensure_ascii=False),
-                gross,
-                int(row.get("generation", 1)),
-                row.get("status", "已裁定"),
-                row.get("adjudicated_at"),
-                row.get("created_at", now_iso()),
-            ),
-        )
+    for name in ("tickets.json", "tickets_customs_receipt_k11.json"):
+        for row in _load_json(name):
+            if conn.execute(
+                "SELECT id FROM weigh_tickets WHERE ticket_code=?", (row["ticket_code"],)
+            ).fetchone():
+                continue
+            lane = _lane_id(conn, row["lane_code"])
+            if not lane:
+                continue
+            axles = row.get("axle_weights", [])
+            gross = float(
+                row.get("gross_t", sum(float(a.get("w", 0)) for a in axles))
+            )
+            conn.execute(
+                """INSERT INTO weigh_tickets(ticket_code,lane_id,bl_ref,vehicle_plate,
+                   axle_weights,gross_t,generation,status,adjudicated_at,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    row["ticket_code"],
+                    lane,
+                    row["bl_ref"],
+                    row["vehicle_plate"],
+                    json.dumps(axles, ensure_ascii=False),
+                    gross,
+                    int(row.get("generation", 1)),
+                    row.get("status", "已裁定"),
+                    row.get("adjudicated_at"),
+                    row.get("created_at", now_iso()),
+                ),
+            )
 
 
 def seed_overloads(conn: sqlite3.Connection) -> None:
@@ -448,6 +496,7 @@ def init_db() -> None:
         seed_gate_samples(conn)
         seed_seals_sample(conn)
         seed_lineage_samples(conn)
+        seed_customs_receipts(conn)
         conn.commit()
 
 
@@ -477,6 +526,14 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         """SELECT COUNT(*) c FROM weigh_tickets
            WHERE status='旁路挂起'"""
     ).fetchone()["c"]
+    receipt_ready = conn.execute(
+        "SELECT COUNT(*) c FROM customs_receipts"
+    ).fetchone()["c"]
+    receipt_pending = conn.execute(
+        """SELECT COUNT(DISTINCT t.bl_ref) c FROM weigh_tickets t
+           WHERE t.status NOT IN ('作废')
+             AND t.bl_ref NOT IN (SELECT bl_code FROM customs_receipts)"""
+    ).fetchone()["c"]
     return {
         "bridges": bridges,
         "lanes": lanes,
@@ -486,6 +543,8 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         "gate_seals": sealed,
         "bl_manifests": bl_count,
         "side_pending": pending,
+        "customs_receipts": receipt_ready,
+        "customs_receipt_pending": receipt_pending,
         "stubs": stubs,
         "meta": PRODUCT_META,
     }

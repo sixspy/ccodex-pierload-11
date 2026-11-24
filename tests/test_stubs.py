@@ -24,15 +24,24 @@ def test_customs_stub_enqueue():
     h = _auth(c)
     jobs = c.get("/api/customs/jobs", headers=h).json()
     assert jobs["stub"] is True
+    # BL-2026-0101 在回执夹具中已到：空桩任务反映“回执已到”同态
     res = c.post(
         "/api/customs-stub",
         headers=h,
         json={"bl_code": "BL-2026-0101", "row_count": 3, "mode": "dry_run"},
     )
     assert res.status_code == 200
-    assert res.json()["status"] == "已入队"
+    assert res.json()["status"] == "回执已到"
+    # BL-2026-0103 无回执：空桩任务停留“回执待回”，不得伪装完成
+    pending = c.post(
+        "/api/customs-stub",
+        headers=h,
+        json={"bl_code": "BL-2026-0103", "row_count": 1, "mode": "dry_run"},
+    )
+    assert pending.status_code == 200
+    assert pending.json()["status"] == "回执待回"
     jobs = c.get("/api/customs/jobs", headers=h).json()["items"]
-    assert len(jobs) >= 1
+    assert len(jobs) >= 2
 
 
 def test_crane_stub_enqueue():

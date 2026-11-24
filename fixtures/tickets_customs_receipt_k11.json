@@ -1,0 +1,17 @@
+[
+  {
+    "ticket_code": "PL-K11",
+    "lane_code": "LN-N-01-IN",
+    "bl_ref": "BL-2026-0111",
+    "vehicle_plate": "沪K·K11试",
+    "axle_weights": [
+      {"axle": 1, "w": 9.0},
+      {"axle": 2, "w": 12.0},
+      {"axle": 3, "w": 12.0},
+      {"axle": 4, "w": 10.0}
+    ],
+    "gross_t": 43.0,
+    "status": "已裁定",
+    "created_at": "2026-01-11T09:00:00"
+  }
+]
